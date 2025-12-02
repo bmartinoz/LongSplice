@@ -203,19 +203,17 @@ LongSplice: Pipeline de Análisis de RNA-seq de Lecturas Largas
 bmartinoz
 ```
 
-## 👤 Authors
+## 👤 Author
 
-- **Benjamín Matín Albornoz## 📄 License
-
-[Add your license here]
+- **Benjamín Matín Albornoz
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome! Please feel free to submit a Pull Request.Removed author and license sections from README.
 
 ## ❓ Support
 
-For issues, questions, or feature requests, please open an issue on the GitHub repository.
+For issues, questions, or feature requests, please open an issue on the GitHub repository.Removed author and license sections from README.
 
 ## 🔗 References
 
