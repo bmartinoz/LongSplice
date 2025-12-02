@@ -194,18 +194,10 @@ resultados/
 └── multiqc_report.html    # Consolidated QC report
 ```
 
-## 📝 Citation
-
-If you use LongSplice in your research, please cite:
-
-```
-LongSplice: Pipeline de Análisis de RNA-seq de Lecturas Largas
-bmartinoz
-```
 
 ## 👤 Author
 
-- **Benjamín Matín Albornoz
+- **Benjamín Matín Albornoz**
 
 ## 🤝 Contributing
 
@@ -222,7 +214,7 @@ For issues, questions, or feature requests, please open an issue on the GitHub r
 - [FLAIR](https://github.com/BrooksLabUCSC/flair)
 - [Bambu](https://github.com/GoekeLab/bambu)
 - [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html)
-- [SUPPA2](https://github.com/comprna/SUPPA)** - Based on uploaded file structure
+- [SUPPA2](https://github.com/comprna/SUPPA)
 
 
 
