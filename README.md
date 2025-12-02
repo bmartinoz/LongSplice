@@ -205,9 +205,7 @@ bmartinoz
 
 ## 👤 Authors
 
-- **bmartinoz** - Based on uploaded file structure
-
-## 📄 License
+- **Benjamín Matín Albornoz## 📄 License
 
 [Add your license here]
 
@@ -218,6 +216,17 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## ❓ Support
 
 For issues, questions, or feature requests, please open an issue on the GitHub repository.
+
+## 🔗 References
+
+- [Nextflow Documentation](https://www.nextflow.io/docs/latest/index.html)
+- [Minimap2](https://github.com/lh3/minimap2)
+- [FLAIR](https://github.com/BrooksLabUCSC/flair)
+- [Bambu](https://github.com/GoekeLab/bambu)
+- [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html)
+- [SUPPA2](https://github.com/comprna/SUPPA)** - Based on uploaded file structure
+
+
 
 ## 🔗 References
 
