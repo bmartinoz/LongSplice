@@ -1,0 +1,574 @@
+align/main.nf
+/*
+* flair align: aligns fastq files to using minmap2 and converts the bam file
+* to a bed file
+* NOTE: flair align should allow hifi reads and use PacBio's wrapper function of minmap2
+*/
+process FLAIR_ALIGN {
+    tag "$meta.id"
+    label 'process_medium'
+
+    input:
+    tuple val(meta), path(fastq)
+    path ref_fasta
+    path ref_index
+    path gtf
+
+    output:
+    tuple val(meta), path("*.bam"), path("*.bam.bai")        , emit: bam
+    tuple val(meta), path("*.bed")                           , emit: bed
+    path "versions.yml"                                      , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
+
+    script:
+    def args = task.ext.args_flair_align ?: ''
+    def prefix = task.ext.prefix ?: "${meta.id}"
+
+    """
+    flair align \\
+        -g ${ref_fasta} \\
+        -r ${fastq} \\
+        -o ${prefix}.flair.aligned \\
+        --quality ${params.min_mapq} \\
+        --threads ${task.cpus} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        flair: \$( flair --version | sed 's/flair //' )
+    END_VERSIONS
+    """
+
+}collapse/main.nf
+/*
+* flair collapse for isoform identification
+*
+* The important output files are
+*  - prefix.isoforms.gtf - your custom transcriptome which you can align to if you want
+*  - prefix.isoforms.bed - the easiest way to visualize your isoforms on the UCSC genome browser or IGV, can also be useful for FLAIR-quantify
+*  - prefix.combined.isoform.read.map.txt - all detected isoforms associated with the reads that support them
+*/
+
+process FLAIR_COLLAPSE {
+    tag './collapse/combined_samples.flair.collapse.*'
+    publishDir "${params.outdir}/collapse", mode: 'copy'
+
+    input:
+        path(ref_fasta)
+        path(gtf)
+        tuple val(meta), path(combined_fastq)
+        tuple val(meta_bed), path(combined_corrected_bed)
+
+    output:
+        tuple val(meta), path('*flair.collapse.isoforms.fa'), emit: isoforms_fa
+        tuple val(meta), path('*flair.collapse.isoforms.bed'), emit: isoforms_bed
+        tuple val(meta), path('*flair.collapse.isoform.read.map.txt'), emit: isoform_read_map      
+
+    script: 
+    """
+    flair collapse -g ${ref_fasta} \
+      --gtf ${gtf} \
+      -q ${combined_corrected_bed} \
+      -r ${combined_fastq} \
+      --annotation_reliant generate --generate_map --check_splice --stringent \
+      --output ${meta.id}_flair.collapse \
+      --threads $task.cpus
+    """
+}correct/main.nf
+/*
+* flair correctr: corrects alignments to the annotated splice sites
+*/ 
+process FLAIR_CORRECT {
+    tag "${meta.id}"
+    publishDir "${params.outdir}/correct", mode: 'copy'
+    label 'process_medium'
+
+    input: 
+        tuple val(meta), path(bed)
+        path ref_fasta
+        path gtf
+
+    output: 
+        tuple val(meta), path("${meta.id}.flair_all_corrected.bed"),         emit: corrected_bed
+        tuple val(meta), path("${meta.id}.flair_all_inconsistent.bed"),      emit: inconsistent_bed
+        path "versions.yml",                                                 emit: versions      
+
+    script:
+    """
+    flair correct  \
+        -f ${gtf} \
+        -q ${bed} \
+        -o ${meta.id}.flair \
+        --threads $task.cpus
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        flair: \$( flair --version | sed 's/flair //' )
+    END_VERSIONS
+    """
+}diffexp/main.nf
+// modules/flair/diffexp/main.nf
+nextflow.enable.dsl = 2
+
+/*
+ * FLAIR diffexp - Differential expression and usage analysis
+ * Runs DESeq2 (genes & isoforms) and DRIMSeq (isoforms only)
+ * Requires: R, DESeq2, DRIMSeq packages
+ * NOTE: Control condition should be alphabetically lower than test condition
+ */
+process FLAIR_DIFFEXP {
+    tag "diffexp"
+    publishDir "${params.outdir}/diffexp", mode: 'copy'
+    label "process_medium"
+    
+    input:
+    path(counts_matrix)           // flair.quantify.counts.tsv
+    
+    output:
+    path("diffexp_out"), emit: diffexp
+    
+    script:
+    def exp_arg = task.ext.exp_thresh ? task.ext.diffexp_thresh : "1"
+    """
+    mkdir -p diffexp_out
+    
+    flair diffexp \
+        --counts_matrix ${counts_matrix} \
+        --out_dir diffexp_out \
+        --exp_thresh ${exp_arg} \
+        --threads $task.cpus \
+        --out_dir_force
+    
+    """
+}diffsplice/main.nf
+// modules/flair/diffsplice/main.nf
+nextflow.enable.dsl = 2
+
+/*
+ * FLAIR diffsplice - Alternative splicing analysis
+ * Detects: intron retention (ir), alt 3'/5' splicing, cassette exons (es)
+ * Optional: DRIMSeq statistical testing with 3+ replicates per condition
+ */
+process FLAIR_DIFFSPLICE {
+    tag "diffsplice"
+    publishDir "${params.outdir}/diffsplice", mode: 'copy'
+    label "process_medium"
+    
+    input:
+    tuple val(meta), path(isoforms_bed)            // combined_samples.flair.collapse.isoforms.bed
+    path(counts_matrix)           // flair.quantify.counts.tsv
+    
+    output:
+    path("diffsplice_out"), emit: diffsplice
+    
+    script:
+
+    """
+    mkdir -p diffsplice_out
+    
+    flair diffsplice \
+        --isoforms ${isoforms_bed} \
+        --counts_matrix ${counts_matrix} \
+        --out_dir diffsplice_out \
+        --threads $task.cpus \
+        --out_dir_force \
+        --test
+    """
+}quantify/main.nf
+/*
+* flair quantify process that creates flair.quantify.*.isoform.read.map.txt and
+* flair.quanitfy.counts.tsv files in the ./quant foler
+* NOTE: the parameters suggested here are from the tutorial and for hg38
+*/
+process FLAIR_QUANTIFY {
+    tag  "awa"
+    publishDir "${params.outdir}/quant", mode: 'copy'
+
+    input:
+        tuple val(meta), path(collapse_bed)
+        tuple val(meta2), path(collapse_fa)
+        path(sample_manifest_tsv)
+
+
+    output:
+        path('flair.quantify.*.isoform.read.map.txt'), emit: quantify_isoform_read_map
+        path('flair.quantify.counts.tsv'),            emit: quantify_counts
+
+    script:
+    """
+    flair quantify -r ${sample_manifest_tsv} \
+      -i ${collapse_fa} \
+      --generate_map --isoform_bed ${collapse_bed} \
+      --stringent --check_splice \
+      --threads $task.cpus \
+      --output flair.quantify    
+    """        
+}transcriptome/main.nf
+// modules/flair/transcriptome/main.nf
+nextflow.enable.dsl = 2
+
+/*
+ * FLAIR_TRANSCRIPTOME: genera transcriptoma de alta confianza directamente desde BAM
+ * (más rápido y con menos memoria que correct + collapse).
+ * Recibe meta como Map {id: ...} y usa meta.id para prefijos seguros.
+ */
+
+process FLAIR_TRANSCRIPTOME {
+    tag { meta.id }
+    label 'process_high'
+
+    cpus   { params.flair_transcriptome_cpus ?: 8 }
+    memory { params.flair_transcriptome_mem  ?: '24 GB' }
+    time   { params.flair_transcriptome_time ?: '36h' }
+
+    publishDir (params.flair_transcriptome_publishdir ?: "${params.outdir ?: 'results'}/flair/transcriptome"),
+               mode: 'copy',
+               overwrite: true
+
+    input:
+    // Firma alineada a ANALYSIS_FLAIR: (metaMap, bam, bai) + refs + junctions
+    tuple val(meta), path(sample_bam), path(sample_bai)
+    path genome_fasta
+    path gtf
+    path shortread_junctions   // puede venir como marcador 'NO_JUNCTIONS'
+
+    output:
+    // Usa meta.id en nombres de salida (no interpolar el Map completo).
+    tuple val(meta), path("${meta.id}.flair.isoforms.bed"),         emit: bed
+    tuple val(meta), path("${meta.id}.flair.isoforms.gtf"),         emit: gtf
+    tuple val(meta), path("${meta.id}.flair.isoforms.fa"),          emit: fa
+    tuple val(meta), path("${meta.id}.flair.isoforms.cds.fa"),      emit: cds
+    tuple val(meta), path("${meta.id}.flair.read.map.txt"),         emit: readmap, optional: true
+
+    script:
+    // Prefijo seguro
+    def sid = (meta instanceof Map ? meta.id : meta.toString())
+
+    // Flags opcionales
+    def gtf_arg        = (gtf && gtf.name != 'NO_GTF') ? "-f ${gtf}" : ''
+    def junctions_arg  = (shortread_junctions && shortread_junctions.name != 'NO_JUNCTIONS') ? "-j ${shortread_junctions}" : ''
+
+    // Parámetros tunables (con defaults sensatos)
+    def support        = params.flair_transcriptome_support          ?: 3
+    def ss_window      = params.flair_transcriptome_ss_window        ?: 15
+    def end_window     = params.flair_transcriptome_end_window       ?: 100
+    def max_ends       = params.flair_transcriptome_max_ends         ?: 2
+    def stringent_flag = params.flair_transcriptome_stringent        ?  '--stringent'   : ''
+    def check_splice   = params.flair_transcriptome_check_splice     ?  '--check_splice': ''
+    def no_align_annot = params.flair_transcriptome_noaligntoannot   ?  '--noaligntoannot' : ''
+    def no_redundant   = params.flair_transcriptome_no_redundant     ?: 'none'
+    def filter_mode    = params.flair_transcriptome_filter           ?: 'default'
+    def predict_cds    = params.flair_transcriptome_predictCDS       ?  '--predictCDS'  : ''
+
+    """
+    set -euo pipefail
+
+    flair transcriptome \\
+        -b ${sample_bam} \\
+        -g ${genome_fasta} \\
+        -o ${sid}.flair \\
+        -t ${task.cpus} \\
+        ${gtf_arg} \\
+        ${junctions_arg} \\
+        --ss_window ${ss_window} \\
+        -s ${support} \\
+        ${stringent_flag} \\
+        ${check_splice} \\
+        -w ${end_window} \\
+        ${no_align_annot} \\
+        -n ${no_redundant} \\
+        --max_ends ${max_ends} \\
+        --filter ${filter_mode} \\
+        ${predict_cds}
+
+    """
+}
+align/main.nf
+/*
+* flair align: aligns fastq files to using minmap2 and converts the bam file
+* to a bed file
+* NOTE: flair align should allow hifi reads and use PacBio's wrapper function of minmap2
+*/
+process FLAIR_ALIGN {
+    tag "$meta.id"
+    label 'process_medium'
+
+    input:
+    tuple val(meta), path(fastq)
+    path ref_fasta
+    path ref_index
+    path gtf
+
+    output:
+    tuple val(meta), path("*.bam"), path("*.bam.bai")        , emit: bam
+    tuple val(meta), path("*.bed")                           , emit: bed
+    path "versions.yml"                                      , emit: versions
+
+    when:
+    task.ext.when == null || task.ext.when
+
+    script:
+    def args = task.ext.args_flair_align ?: ''
+    def prefix = task.ext.prefix ?: "${meta.id}"
+
+    """
+    flair align \\
+        -g ${ref_fasta} \\
+        -r ${fastq} \\
+        -o ${prefix}.flair.aligned \\
+        --quality ${params.min_mapq} \\
+        --threads ${task.cpus} \\
+        ${args}
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        flair: \$( flair --version | sed 's/flair //' )
+    END_VERSIONS
+    """
+
+}collapse/main.nf
+/*
+* flair collapse for isoform identification
+*
+* The important output files are
+*  - prefix.isoforms.gtf - your custom transcriptome which you can align to if you want
+*  - prefix.isoforms.bed - the easiest way to visualize your isoforms on the UCSC genome browser or IGV, can also be useful for FLAIR-quantify
+*  - prefix.combined.isoform.read.map.txt - all detected isoforms associated with the reads that support them
+*/
+
+process FLAIR_COLLAPSE {
+    tag './collapse/combined_samples.flair.collapse.*'
+    publishDir "${params.outdir}/collapse", mode: 'copy'
+
+    input:
+        path(ref_fasta)
+        path(gtf)
+        tuple val(meta), path(combined_fastq)
+        tuple val(meta_bed), path(combined_corrected_bed)
+
+    output:
+        tuple val(meta), path('*flair.collapse.isoforms.fa'), emit: isoforms_fa
+        tuple val(meta), path('*flair.collapse.isoforms.bed'), emit: isoforms_bed
+        tuple val(meta), path('*flair.collapse.isoform.read.map.txt'), emit: isoform_read_map      
+
+    script: 
+    """
+    flair collapse -g ${ref_fasta} \
+      --gtf ${gtf} \
+      -q ${combined_corrected_bed} \
+      -r ${combined_fastq} \
+      --annotation_reliant generate --generate_map --check_splice --stringent \
+      --output ${meta.id}_flair.collapse \
+      --threads $task.cpus
+    """
+}correct/main.nf
+/*
+* flair correctr: corrects alignments to the annotated splice sites
+*/ 
+process FLAIR_CORRECT {
+    tag "${meta.id}"
+    publishDir "${params.outdir}/correct", mode: 'copy'
+    label 'process_medium'
+
+    input: 
+        tuple val(meta), path(bed)
+        path ref_fasta
+        path gtf
+
+    output: 
+        tuple val(meta), path("${meta.id}.flair_all_corrected.bed"),         emit: corrected_bed
+        tuple val(meta), path("${meta.id}.flair_all_inconsistent.bed"),      emit: inconsistent_bed
+        path "versions.yml",                                                 emit: versions      
+
+    script:
+    """
+    flair correct  \
+        -f ${gtf} \
+        -q ${bed} \
+        -o ${meta.id}.flair \
+        --threads $task.cpus
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        flair: \$( flair --version | sed 's/flair //' )
+    END_VERSIONS
+    """
+}diffexp/main.nf
+// modules/flair/diffexp/main.nf
+nextflow.enable.dsl = 2
+
+/*
+ * FLAIR diffexp - Differential expression and usage analysis
+ * Runs DESeq2 (genes & isoforms) and DRIMSeq (isoforms only)
+ * Requires: R, DESeq2, DRIMSeq packages
+ * NOTE: Control condition should be alphabetically lower than test condition
+ */
+process FLAIR_DIFFEXP {
+    tag "diffexp"
+    publishDir "${params.outdir}/diffexp", mode: 'copy'
+    label "process_medium"
+    
+    input:
+    path(counts_matrix)           // flair.quantify.counts.tsv
+    
+    output:
+    path("diffexp_out"), emit: diffexp
+    
+    script:
+    def exp_arg = task.ext.exp_thresh ? task.ext.diffexp_thresh : "1"
+    """
+    mkdir -p diffexp_out
+    
+    flair diffexp \
+        --counts_matrix ${counts_matrix} \
+        --out_dir diffexp_out \
+        --exp_thresh ${exp_arg} \
+        --threads $task.cpus \
+        --out_dir_force
+    
+    """
+}diffsplice/main.nf
+// modules/flair/diffsplice/main.nf
+nextflow.enable.dsl = 2
+
+/*
+ * FLAIR diffsplice - Alternative splicing analysis
+ * Detects: intron retention (ir), alt 3'/5' splicing, cassette exons (es)
+ * Optional: DRIMSeq statistical testing with 3+ replicates per condition
+ */
+process FLAIR_DIFFSPLICE {
+    tag "diffsplice"
+    publishDir "${params.outdir}/diffsplice", mode: 'copy'
+    label "process_medium"
+    
+    input:
+    tuple val(meta), path(isoforms_bed)            // combined_samples.flair.collapse.isoforms.bed
+    path(counts_matrix)           // flair.quantify.counts.tsv
+    
+    output:
+    path("diffsplice_out"), emit: diffsplice
+    
+    script:
+
+    """
+    mkdir -p diffsplice_out
+    
+    flair diffsplice \
+        --isoforms ${isoforms_bed} \
+        --counts_matrix ${counts_matrix} \
+        --out_dir diffsplice_out \
+        --threads $task.cpus \
+        --out_dir_force \
+        --test
+    """
+}quantify/main.nf
+/*
+* flair quantify process that creates flair.quantify.*.isoform.read.map.txt and
+* flair.quanitfy.counts.tsv files in the ./quant foler
+* NOTE: the parameters suggested here are from the tutorial and for hg38
+*/
+process FLAIR_QUANTIFY {
+    tag  "awa"
+    publishDir "${params.outdir}/quant", mode: 'copy'
+
+    input:
+        tuple val(meta), path(collapse_bed)
+        tuple val(meta2), path(collapse_fa)
+        path(sample_manifest_tsv)
+
+
+    output:
+        path('flair.quantify.*.isoform.read.map.txt'), emit: quantify_isoform_read_map
+        path('flair.quantify.counts.tsv'),            emit: quantify_counts
+
+    script:
+    """
+    flair quantify -r ${sample_manifest_tsv} \
+      -i ${collapse_fa} \
+      --generate_map --isoform_bed ${collapse_bed} \
+      --stringent --check_splice \
+      --threads $task.cpus \
+      --output flair.quantify    
+    """        
+}transcriptome/main.nf
+// modules/flair/transcriptome/main.nf
+nextflow.enable.dsl = 2
+
+/*
+ * FLAIR_TRANSCRIPTOME: genera transcriptoma de alta confianza directamente desde BAM
+ * (más rápido y con menos memoria que correct + collapse).
+ * Recibe meta como Map {id: ...} y usa meta.id para prefijos seguros.
+ */
+
+process FLAIR_TRANSCRIPTOME {
+    tag { meta.id }
+    label 'process_high'
+
+    cpus   { params.flair_transcriptome_cpus ?: 8 }
+    memory { params.flair_transcriptome_mem  ?: '24 GB' }
+    time   { params.flair_transcriptome_time ?: '36h' }
+
+    publishDir (params.flair_transcriptome_publishdir ?: "${params.outdir ?: 'results'}/flair/transcriptome"),
+               mode: 'copy',
+               overwrite: true
+
+    input:
+    // Firma alineada a ANALYSIS_FLAIR: (metaMap, bam, bai) + refs + junctions
+    tuple val(meta), path(sample_bam), path(sample_bai)
+    path genome_fasta
+    path gtf
+    path shortread_junctions   // puede venir como marcador 'NO_JUNCTIONS'
+
+    output:
+    // Usa meta.id en nombres de salida (no interpolar el Map completo).
+    tuple val(meta), path("${meta.id}.flair.isoforms.bed"),         emit: bed
+    tuple val(meta), path("${meta.id}.flair.isoforms.gtf"),         emit: gtf
+    tuple val(meta), path("${meta.id}.flair.isoforms.fa"),          emit: fa
+    tuple val(meta), path("${meta.id}.flair.isoforms.cds.fa"),      emit: cds
+    tuple val(meta), path("${meta.id}.flair.read.map.txt"),         emit: readmap, optional: true
+
+    script:
+    // Prefijo seguro
+    def sid = (meta instanceof Map ? meta.id : meta.toString())
+
+    // Flags opcionales
+    def gtf_arg        = (gtf && gtf.name != 'NO_GTF') ? "-f ${gtf}" : ''
+    def junctions_arg  = (shortread_junctions && shortread_junctions.name != 'NO_JUNCTIONS') ? "-j ${shortread_junctions}" : ''
+
+    // Parámetros tunables (con defaults sensatos)
+    def support        = params.flair_transcriptome_support          ?: 3
+    def ss_window      = params.flair_transcriptome_ss_window        ?: 15
+    def end_window     = params.flair_transcriptome_end_window       ?: 100
+    def max_ends       = params.flair_transcriptome_max_ends         ?: 2
+    def stringent_flag = params.flair_transcriptome_stringent        ?  '--stringent'   : ''
+    def check_splice   = params.flair_transcriptome_check_splice     ?  '--check_splice': ''
+    def no_align_annot = params.flair_transcriptome_noaligntoannot   ?  '--noaligntoannot' : ''
+    def no_redundant   = params.flair_transcriptome_no_redundant     ?: 'none'
+    def filter_mode    = params.flair_transcriptome_filter           ?: 'default'
+    def predict_cds    = params.flair_transcriptome_predictCDS       ?  '--predictCDS'  : ''
+
+    """
+    set -euo pipefail
+
+    flair transcriptome \\
+        -b ${sample_bam} \\
+        -g ${genome_fasta} \\
+        -o ${sid}.flair \\
+        -t ${task.cpus} \\
+        ${gtf_arg} \\
+        ${junctions_arg} \\
+        --ss_window ${ss_window} \\
+        -s ${support} \\
+        ${stringent_flag} \\
+        ${check_splice} \\
+        -w ${end_window} \\
+        ${no_align_annot} \\
+        -n ${no_redundant} \\
+        --max_ends ${max_ends} \\
+        --filter ${filter_mode} \\
+        ${predict_cds}
+
+    """
+}
