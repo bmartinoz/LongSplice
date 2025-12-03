@@ -1,5 +1,5 @@
 # =============================================================================
-# STAGE 1 · BUILDER — Binarios fuera de Conda (chopper + restrander)
+# STAGE 1 · BUILDER
 # =============================================================================
 FROM debian:bullseye-slim AS builder
 
@@ -15,7 +15,7 @@ RUN apt-get update && \
       libbz2-dev liblzma-dev ca-certificates pkg-config && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ---- Rust para compilar Chopper
+# ---- Rust
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH="/opt/cargo/bin:${PATH}"
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path && \
     chmod -R a+w "$RUSTUP_HOME" "$CARGO_HOME"
@@ -24,7 +24,7 @@ RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no
 RUN git clone --depth 1 --branch ${CHOPPER_VERSION} https://github.com/wdecoster/chopper.git /opt/chopper && \
     cd /opt/chopper && cargo build --release && install -m 0755 target/release/chopper /usr/local/bin/chopper
 
-# ---- Restrander (C++)  ➜ bin + configs
+# ---- Restrander
 RUN git clone --depth 1 --branch ${RESTRANDER_VERSION} https://github.com/mritchielab/restrander.git /opt/restrander && \
     make -C /opt/restrander -j"$(nproc)" && \
     install -m 0755 /opt/restrander/restrander /usr/local/bin/restrander && \
@@ -32,34 +32,34 @@ RUN git clone --depth 1 --branch ${RESTRANDER_VERSION} https://github.com/mritch
     cp -a /opt/restrander/config/*.json /usr/local/share/restrander/config/
 
 # =============================================================================
-# STAGE 2 · RUNTIME — micromamba + FLAIR + herramientas
+# STAGE 2 · RUNTIME
 # =============================================================================
 FROM mambaorg/micromamba:1.5.8
 
-# Binarios compilados en builder (incluye chopper y restrander)
+# Binaries compiled in builder
 COPY --from=builder /usr/local/bin/ /usr/local/bin/
 # Configs de restrander
 COPY --from=builder /usr/local/share/restrander/ /usr/local/share/restrander/
 
-# ---- Crea el entorno desde environment.yml
+# ---- Create environment from environment.yml
 COPY environment.yml /tmp/environment.yml
 ARG ENV_REFRESH=0
 RUN echo "ENV_REFRESH=${ENV_REFRESH}" && \
     micromamba create -y -n longsplice -f /tmp/environment.yml && \
     micromamba clean -a -y
 
-# PATH del entorno y ruta de configs restrander
+# Environment PATH and Restrander config path
 ENV MAMBA_ROOT_PREFIX=/opt/conda \
     CONDA_PREFIX=/opt/conda/envs/longsplice \
     PATH=/opt/conda/envs/longsplice/bin:/opt/conda/bin:/usr/local/bin:/usr/bin:/bin \
     MAMBA_PROC_LOCK_FALLBACK=1 \
     RESTRANDER_CONFIG_DIR=/usr/local/share/restrander/config
 
-# ---- Paquetes del SO + Nextflow
+# ---- OS packages + Nextflow
 USER root
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-# Chromium + librerías de sistema necesarias para Kaleido/Plotly
+# Chromium + system libraries needed for Kaleido/Plotly
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       curl ca-certificates procps git chromium \
@@ -68,7 +68,7 @@ RUN apt-get update && \
       libasound2 fonts-liberation && \
     rm -rf /var/lib/apt/lists/*
 
-# Caches/plots y permisos + backend matplotlib en headless
+# Caches/plots and permissions + headless matplotlib backend
 ENV BROWSER_PATH=/usr/bin/chromium \
     CHROME_PATH=/usr/bin/chromium \
     CHROMIUM_PATH=/usr/bin/chromium \
@@ -85,7 +85,7 @@ RUN curl -fsSL https://get.nextflow.io | bash && \
     mv nextflow /usr/local/bin/nextflow && \
     chmod +x /usr/local/bin/nextflow
 
-# FIX NanoPlot/Kaleido/Choreographer (apunta chromium en el paquete choreographer)
+# FIX NanoPlot/Kaleido/Choreographer (points to chromium in the choreographer package)
 RUN set -eux; \
     for SP in /opt/conda/envs/longsplice/lib/python*/site-packages; do \
       mkdir -p "$SP/choreographer/cli/browser_exe"; \
@@ -93,17 +93,17 @@ RUN set -eux; \
       chmod -R 0777 "$SP/choreographer"; \
     done
 
-# ---- Refuerzos conda puntuales (si hiciera falta)
+# ---- Specific conda packages/fixes
 RUN micromamba run -n longsplice micromamba install -y -c bioconda -c conda-forge pybedtools ncls pipettor && \
     micromamba clean -a -y
 
-# ---- (Re)instalar FLAIR desde Git dentro del mismo env
+# ---- (Re)install FLAIR from Git within the same env
 ARG FLAIR_GIT_REF=master
 ENV FLAIR_GIT_REF=${FLAIR_GIT_REF}
 RUN /opt/conda/envs/longsplice/bin/python -m pip install --no-cache-dir --no-deps --upgrade --force-reinstall \
       "flair-brookslab @ git+https://github.com/BrooksLabUCSC/flair.git@${FLAIR_GIT_REF}"
 
-# Wrapper para 'transcriptome' si no estuviera expuesto en el CLI
+# Wrapper for 'transcriptome' if not exposed in the CLI
 RUN bash -lc '\
   set -euo pipefail; \
   FLAIR="/opt/conda/envs/longsplice/bin/flair"; \
@@ -128,7 +128,7 @@ RUN bash -lc '\
   "$FLAIR" transcriptome -h | head -n 1 || true \
 '
 
-# ---- SUPPA desde el repo + wrapper
+# ---- SUPPA from repo + wrapper
 RUN git clone --depth 1 https://github.com/comprna/SUPPA.git /usr/local/share/SUPPA && \
     (head -n1 /usr/local/share/SUPPA/suppa.py | grep -q '^#!' || \
       sed -i '1i #!/usr/bin/env python3' /usr/local/share/SUPPA/suppa.py) && \
@@ -138,7 +138,7 @@ RUN git clone --depth 1 https://github.com/comprna/SUPPA.git /usr/local/share/SU
     printf '%s\n' '#!/usr/bin/env bash' 'exec python3 /usr/local/bin/suppa.py "$@"' > /usr/local/bin/suppa && \
     chmod 0755 /usr/local/bin/suppa
 
-# ---- Garantizar R libs en el mismo env (incluye argparse para diffSplice_drimSeq.R)
+# ---- Ensure R libs in the same env (includes argparse for diffSplice_drimSeq.R)
 ENV R_LIBS_USER=/opt/conda/envs/longsplice/lib/R/library
 RUN /opt/conda/envs/longsplice/bin/Rscript -e '\
   pkgs <- c("argparse","DESeq2","DRIMSeq","BiocParallel","data.table","optparse","qqman"); \
@@ -150,7 +150,7 @@ RUN /opt/conda/envs/longsplice/bin/Rscript -e '\
   for (p in c("data.table","optparse","qqman")) if (!requireNamespace(p, quietly=TRUE)) install.packages(p, repos="https://cloud.r-project.org"); \
   q(status=0)' || true
 
-# ---- Scripts del pipeline
+# ---- Pipeline scripts
 COPY scripts/make_validated_samplesheet.R /usr/local/bin/
 COPY scripts/make_contrastsheet.R       /usr/local/bin/
 COPY bin/run_bambu.r                    /usr/local/bin/
@@ -165,7 +165,7 @@ RUN chmod +x /usr/local/bin/make_validated_samplesheet.R \
              /usr/local/bin/run_deseq2.r \
              /usr/local/bin/suppa_split_file.R
 
-# ---- Usuario normal + verificación final
+# ---- Normal user + final verification
 USER mambauser
 WORKDIR /data
 RUN micromamba run -n longsplice bash -lc '\
@@ -173,7 +173,6 @@ RUN micromamba run -n longsplice bash -lc '\
   echo -n "Python:        "; python --version || true; \
   echo -n "Java:          "; java -version 2>&1 | head -n1 || true; \
   echo -n "FLAIR:         "; flair --version || true; \
-  echo -n "Transcriptome: "; flair transcriptome -h | head -n1 || true; \
   echo -n "Minimap2:      "; minimap2 --version || true; \
   echo -n "Chopper:       "; chopper --version || true; \
   echo -n "Restrander:    "; restrander 2>&1 | head -n1 || true; \
@@ -184,11 +183,7 @@ RUN micromamba run -n longsplice bash -lc '\
   echo -n "Nextflow:      "; /usr/local/bin/nextflow -version | head -n1 || true; \
   echo -n "deepTools:     "; bamCoverage --version 2>&1 | awk "{print \$NF}" || true; \
   echo -n "bedToBigBed:   "; bedToBigBed 2>&1 | head -n1 || true; \
-  echo -n "SUPPA help:    "; suppa -h 2>&1 | head -n 1 || true; \
   echo -n "R pkgs (quick): "; Rscript -e "cat(all(vapply(c(\"argparse\",\"DESeq2\",\"DRIMSeq\",\"BiocParallel\",\"data.table\",\"optparse\",\"qqman\"), requireNamespace, logical(1), quietly=TRUE)), \"\\n\")"; \
-  echo -n "FastQC:        "; fastqc --version || true; \
-  echo -n "Fastp:         "; fastp -v 2>&1 | head -n1 || true; \
-  echo -n "Bowtie2:       "; bowtie2 --version 2>&1 | head -n1 || true; \
-  echo "--- Listo ---" \
+  echo "--- Done ---" \
 '
 # =============================================================================
