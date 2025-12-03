@@ -31,7 +31,7 @@ LongSplice is a bioinformatic workflow developed in Nextflow that automates the 
 
 - **Reporting**:
   - Alignment statistics (Flagstat, Idxstats, Stats)
-  - Consolidated quality report with MultiQC
+  - Consolidated quality report with NanoPlot
 
 ## 📋 Requirements
 
