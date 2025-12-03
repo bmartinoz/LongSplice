@@ -185,13 +185,13 @@ Results are organized in the output directory with the following structure:
 
 ```
 resultados/
-├── qc/                    # Quality control reports
-├── aligned/               # BAM files and indices
-├── quantification/        # Abundance matrices
-├── differential_expression/  # DESeq2/FLAIR results
-├── differential_splicing/ # DEXSeq/SUPPA2 results
-├── coverage/              # BigWig files
-└── multiqc_report.html    # Consolidated QC report
+├── qc/                        # Quality control reports
+├── aligned/                   # BAM files and indices
+├── quantification/            # Abundance matrices
+├── differential_expression/   # DESeq2/FLAIR results
+├── differential_splicing/     # DEXSeq/SUPPA2 results
+├── coverage/                  # BigWig files
+└── multiqc_report.html        # Consolidated QC report
 ```
 
 
@@ -210,19 +210,13 @@ For issues, questions, or feature requests, please open an issue on the GitHub r
 ## 🔗 References
 
 - [Nextflow Documentation](https://www.nextflow.io/docs/latest/index.html)
+- [NanoPlot](https://github.com/wdecoster/NanoPlot)
+- [chopper](https://github.com/wdecoster/chopper)
+- [pychopper](https://github.com/epi2me-labs/pychopper)
+- [Restrander](https://github.com/mritchielab/restrander)
 - [Minimap2](https://github.com/lh3/minimap2)
 - [FLAIR](https://github.com/BrooksLabUCSC/flair)
 - [Bambu](https://github.com/GoekeLab/bambu)
 - [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html)
-- [SUPPA2](https://github.com/comprna/SUPPA)
-
-
-
-## 🔗 References
-
-- [Nextflow Documentation](https://www.nextflow.io/docs/latest/index.html)
-- [Minimap2](https://github.com/lh3/minimap2)
-- [FLAIR](https://github.com/BrooksLabUCSC/flair)
-- [Bambu](https://github.com/GoekeLab/bambu)
-- [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html)
+- [DEXSeq](https://bioconductor.org/packages/release/bioc/html/DEXSeq.html)
 - [SUPPA2](https://github.com/comprna/SUPPA)
